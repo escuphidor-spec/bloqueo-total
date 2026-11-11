@@ -6,9 +6,17 @@ import android.content.Intent
 
 class LockAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        val lockIntent = Intent("ACTION_ACTIVATE_LOCK").apply {
+        val actionType = intent?.getStringExtra("ACTION_TYPE")
+
+        val targetAction = if (actionType == "UNLOCK") {
+            "ACTION_DEACTIVATE_LOCK"
+        } else {
+            "ACTION_ACTIVATE_LOCK"
+        }
+
+        val broadcastIntent = Intent(targetAction).apply {
             setPackage(context.packageName)
         }
-        context.sendBroadcast(lockIntent)
+        context.sendBroadcast(broadcastIntent)
     }
 }
