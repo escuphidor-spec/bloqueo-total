@@ -8,7 +8,6 @@ import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.Build
-import android.os.PowerManager
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.util.DisplayMetrics
@@ -17,12 +16,12 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
+import android.widget.Toast
 
 class TouchBlockerService : AccessibilityService() {
 
     private var windowManager: WindowManager? = null
     private var overlayView: View? = null
-    private var wakeLock: PowerManager.WakeLock? = null
     private var isLocked = false
 
     // Combinación para BLOQUEAR: Vol+, Vol+, Vol-, Vol-
@@ -48,11 +47,13 @@ class TouchBlockerService : AccessibilityService() {
     private val systemReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
-                "ACTION_ACTIVATE_LOCK" -> enableLockOverlay()
-                Intent.ACTION_SCREEN_OFF -> {
-                    if (isLocked) {
-                        forceWakeUpWithBlackScreen()
-                    }
+                "ACTION_ACTIVATE_LOCK" -> {
+                    vibrateShort()
+                    enableLockOverlay()
+                }
+                "ACTION_DEACTIVATE_LOCK" -> {
+                    vibrateShort()
+                    disableLockOverlay()
                 }
             }
         }
@@ -64,7 +65,7 @@ class TouchBlockerService : AccessibilityService() {
 
         val filter = IntentFilter().apply {
             addAction("ACTION_ACTIVATE_LOCK")
-            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction("ACTION_DEACTIVATE_LOCK")
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(systemReceiver, filter, RECEIVER_NOT_EXPORTED)
@@ -104,6 +105,7 @@ class TouchBlockerService : AccessibilityService() {
             }
         }
 
+        // Mientras está bloqueado, bloqueamos también el cambio de volumen
         if (isLocked) {
             return true
         }
@@ -113,16 +115,9 @@ class TouchBlockerService : AccessibilityService() {
     private fun enableLockOverlay() {
         if (isLocked || overlayView != null) return
 
-        acquirePersistentWakeLock()
-
         overlayView = View(this).apply {
-            setBackgroundColor(Color.BLACK)
-            @Suppress("DEPRECATION")
-            systemUiVisibility = (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                    or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                    or View.SYSTEM_UI_FLAG_FULLSCREEN
-                    or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                    or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN)
+            // Capa 100% transparente: permite ver la pantalla y el estado de carga
+            setBackgroundColor(Color.TRANSPARENT)
         }
 
         val metrics = DisplayMetrics()
@@ -137,13 +132,10 @@ class TouchBlockerService : AccessibilityService() {
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                     WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
-                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                    WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
-                    WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
-            PixelFormat.OPAQUE
+                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED,
+            PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            screenBrightness = 0.0f
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 layoutInDisplayCutoutMode =
                     WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
@@ -152,6 +144,7 @@ class TouchBlockerService : AccessibilityService() {
 
         windowManager?.addView(overlayView, params)
         isLocked = true
+        Toast.makeText(this, "Pantalla Bloqueada", Toast.LENGTH_SHORT).show()
     }
 
     private fun disableLockOverlay() {
@@ -160,35 +153,8 @@ class TouchBlockerService : AccessibilityService() {
             windowManager?.removeView(it)
             overlayView = null
         }
-        releaseWakeLock()
         isLocked = false
-    }
-
-    @Suppress("DEPRECATION")
-    private fun acquirePersistentWakeLock() {
-        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(
-            PowerManager.SCREEN_DIM_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
-            "BloqueoTotal::LockWakeLock"
-        )
-        wakeLock?.acquire()
-    }
-
-    @Suppress("DEPRECATION")
-    private fun forceWakeUpWithBlackScreen() {
-        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        val tempWake = pm.newWakeLock(
-            PowerManager.SCREEN_DIM_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
-            "BloqueoTotal::WakeUpOnPowerPress"
-        )
-        tempWake.acquire(3000L)
-    }
-
-    private fun releaseWakeLock() {
-        wakeLock?.let {
-            if (it.isHeld) it.release()
-        }
-        wakeLock = null
+        Toast.makeText(this, "Pantalla Desbloqueada", Toast.LENGTH_SHORT).show()
     }
 
     private fun vibrateShort() {
@@ -207,7 +173,8 @@ class TouchBlockerService : AccessibilityService() {
         val pkg = event.packageName?.toString() ?: ""
         val cls = event.className?.toString() ?: ""
 
-        if (pkg.contains("camera") || cls.contains("GlobalActions") || pkg == "com.android.systemui") {
+        // Evita que abran la cámara con doble clic o el menú de apagado con el botón lateral
+        if (pkg.contains("camera") || cls.contains("GlobalActions")) {
             performGlobalAction(GLOBAL_ACTION_BACK)
         }
     }
@@ -216,7 +183,6 @@ class TouchBlockerService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
-        releaseWakeLock()
         unregisterReceiver(systemReceiver)
     }
 }
