@@ -16,21 +16,29 @@ import java.util.Calendar
 
 class MainActivity : Activity() {
 
+    private lateinit var statusText: TextView
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(60, 100, 60, 60)
+            setPadding(60, 80, 60, 60)
         }
 
         val infoText = TextView(this).apply {
-            text = "INSTRUCCIONES DE USO:\n\n" +
-                    "• Para BLOQUEAR manualmente:\n  Presiona Vol+, Vol+, Vol-, Vol-\n\n" +
-                    "• Para DESBLOQUEAR:\n  Presiona Vol+, Vol-, Vol+, Vol-\n"
-            textSize = 16f
+            text = "MODO MANUAL (Botones de Volumen):\n" +
+                    "• Bloquear: Vol+, Vol+, Vol-, Vol-\n" +
+                    "• Desbloquear: Vol+, Vol-, Vol+, Vol-\n"
+            textSize = 15f
+            setPadding(0, 0, 0, 30)
+        }
+
+        statusText = TextView(this).apply {
+            textSize = 15f
             setPadding(0, 0, 0, 40)
         }
+        actualizarTextoHorarios()
 
         val btnAccessibility = Button(this).apply {
             text = "1. Activar Permiso de Accesibilidad"
@@ -39,39 +47,52 @@ class MainActivity : Activity() {
             }
         }
 
-        val btnSchedule = Button(this).apply {
-            text = "2. Programar Hora de Bloqueo"
+        val btnScheduleLock = Button(this).apply {
+            text = "2. Programar Hora de BLOQUEO"
             setOnClickListener {
-                mostrarSelectorHora()
+                mostrarSelectorHora(isUnlock = false)
             }
         }
 
-        val btnCancelSchedule = Button(this).apply {
-            text = "Cancelar Horario Programado"
+        val btnScheduleUnlock = Button(this).apply {
+            text = "3. Programar Hora de DESBLOQUEO"
             setOnClickListener {
-                cancelarAlarma()
+                mostrarSelectorHora(isUnlock = true)
+            }
+        }
+
+        val btnCancelSchedules = Button(this).apply {
+            text = "4. Cancelar Bloqueo y Desbloqueo Automático"
+            setOnClickListener {
+                cancelarAlarmas()
             }
         }
 
         layout.addView(infoText)
+        layout.addView(statusText)
         layout.addView(btnAccessibility)
-        layout.addView(btnSchedule)
-        layout.addView(btnCancelSchedule)
+        layout.addView(btnScheduleLock)
+        layout.addView(btnScheduleUnlock)
+        layout.addView(btnCancelSchedules)
         setContentView(layout)
     }
 
-    private fun mostrarSelectorHora() {
+    private fun mostrarSelectorHora(isUnlock: Boolean) {
         val cal = Calendar.getInstance()
         TimePickerDialog(this, { _, hourOfDay, minute ->
-            programarAlarma(hourOfDay, minute)
+            programarAlarma(hourOfDay, minute, isUnlock)
         }, cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE), true).show()
     }
 
-    private fun programarAlarma(hour: Int, minute: Int) {
+    private fun programarAlarma(hour: Int, minute: Int, isUnlock: Boolean) {
         val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val intent = Intent(this, LockAlarmReceiver::class.java)
+        val intent = Intent(this, LockAlarmReceiver::class.java).apply {
+            putExtra("ACTION_TYPE", if (isUnlock) "UNLOCK" else "LOCK")
+        }
+
+        val requestCode = if (isUnlock) 2002 else 1001
         val pendingIntent = PendingIntent.getBroadcast(
-            this, 1001, intent,
+            this, requestCode, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
@@ -90,21 +111,48 @@ class MainActivity : Activity() {
             pendingIntent
         )
 
-        Toast.makeText(
-            this,
-            "Bloqueo programado para las %02d:%02d".format(hour, minute),
-            Toast.LENGTH_LONG
-        ).show()
+        val horaFormateada = "%02d:%02d".format(hour, minute)
+        val prefs = getSharedPreferences("horarios_prefs", Context.MODE_PRIVATE)
+        if (isUnlock) {
+            prefs.edit().putString("hora_desbloqueo", horaFormateada).apply()
+            Toast.makeText(this, "Desbloqueo programado a las $horaFormateada", Toast.LENGTH_LONG).show()
+        } else {
+            prefs.edit().putString("hora_bloqueo", horaFormateada).apply()
+            Toast.makeText(this, "Bloqueo programado a las $horaFormateada", Toast.LENGTH_LONG).show()
+        }
+        actualizarTextoHorarios()
     }
 
-    private fun cancelarAlarma() {
+    private fun cancelarAlarmas() {
         val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val intent = Intent(this, LockAlarmReceiver::class.java)
-        val pendingIntent = PendingIntent.getBroadcast(
-            this, 1001, intent,
+
+        val intentLock = Intent(this, LockAlarmReceiver::class.java).putExtra("ACTION_TYPE", "LOCK")
+        val piLock = PendingIntent.getBroadcast(
+            this, 1001, intentLock,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        alarmManager.cancel(pendingIntent)
-        Toast.makeText(this, "Horario cancelado", Toast.LENGTH_SHORT).show()
+        alarmManager.cancel(piLock)
+
+        val intentUnlock = Intent(this, LockAlarmReceiver::class.java).putExtra("ACTION_TYPE", "UNLOCK")
+        val piUnlock = PendingIntent.getBroadcast(
+            this, 2002, intentUnlock,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        alarmManager.cancel(piUnlock)
+
+        val prefs = getSharedPreferences("horarios_prefs", Context.MODE_PRIVATE)
+        prefs.edit().clear().apply()
+        actualizarTextoHorarios()
+
+        Toast.makeText(this, "Horarios automáticos cancelados", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun actualizarTextoHorarios() {
+        val prefs = getSharedPreferences("horarios_prefs", Context.MODE_PRIVATE)
+        val lockTime = prefs.getString("hora_bloqueo", "Sin programar")
+        val unlockTime = prefs.getString("hora_desbloqueo", "Sin programar")
+        statusText.text = "HORARIOS ACTIVOS:\n" +
+                "• Hora de Bloqueo: $lockTime\n" +
+                "• Hora de Desbloqueo: $unlockTime"
     }
 }
